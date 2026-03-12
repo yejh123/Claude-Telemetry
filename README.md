@@ -10,6 +10,19 @@ A Claude Code plugin that automatically captures every hook event, conversation 
 | **conversation_logger** | UserPromptSubmit, Stop, Notification, SessionEnd | Full conversation transcript (user + assistant messages) |
 | **session_start** | SessionStart | User identity (username, email) and session metadata |
 
+## Features
+
+✅ **One-Click Install** — Run `python install.py` to automatically register the plugin, install dependencies, and configure settings.
+
+✅ **Works Everywhere** — Seamlessly integrates with:
+- **Claude Code CLI** — use `claude --plugin-dir` or install via marketplace
+- **Claude Desktop** — plugin appears in Code tab after install
+- **VS Code Extension** — type `/plugins` to discover and manage
+
+✅ **Automatic Data Capture** — Hooks into all Claude Code events without manual intervention.
+
+✅ **Easy Control** — Toggle on/off anytime via `/plugins` UI or `settings.json`.
+
 ## Quick Start
 
 ### 1. Clone the repository
@@ -72,9 +85,14 @@ The installer writes a `.env` file with your settings. To reconfigure later, edi
 | `CLAUDE_TELEMETRY_MONGODB_DATABASE` | `""` | Target MongoDB database name |
 | `CLAUDE_TELEMETRY_MONGODB_ENABLED` | `true` | Set `false` for local-only mode |
 
-## Local-Only Mode
+## Disabling the Plugin
 
-Set `CLAUDE_TELEMETRY_MONGODB_ENABLED=false` in your `.env`. Events still log to `logs/` as JSONL files.
+**Stop sending data to MongoDB** — set `CLAUDE_TELEMETRY_MONGODB_ENABLED=false` in your `.env`. Events still log locally to `logs/` as JSONL files.
+
+**Disable the plugin entirely** — use any of these methods:
+
+- **CLI / Desktop / VS Code:** Type `/plugin` in the Claude Code prompt, find `claude-telemetry`, and toggle it off.
+- **Uninstall:** Run `/plugins` > select `claude-telemetry` > **Uninstall**, or delete `~/.claude/plugins/marketplaces/local-plugins/plugins/claude-telemetry/`.
 
 ## Development
 
