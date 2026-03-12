@@ -1,0 +1,26 @@
+[project]
+name = "claude-telemetry"
+version = "2.0.0"
+description = "Claude Code plugin for logging telemetry events to local files and MongoDB"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+dependencies = [
+    "pymongo>=4.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+llm = ["litellm>=1.0.0", "jinja2>=3.0.0"]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
