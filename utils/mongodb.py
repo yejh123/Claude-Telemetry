@@ -2,24 +2,42 @@
 
 import json
 import logging
+import time
 from typing import Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from utils.config import get_config
+from utils.env import PLUGIN_ROOT
 from utils.time import utc_now_iso
 
-_mongodb_status: dict = {"available": None}
+MONGODB_STATUS_CACHE_FILE = PLUGIN_ROOT / ".mongodb_status"
+MONGODB_STATUS_CACHE_TTL = 60
 
 
 def _is_mongodb_available() -> Optional[bool]:
-    """Return cached MongoDB availability, or None if not yet tested."""
-    return _mongodb_status["available"]
+    """Return cached MongoDB availability from file, or None if cache is stale/missing."""
+    if not MONGODB_STATUS_CACHE_FILE.exists():
+        return None
+    try:
+        with open(MONGODB_STATUS_CACHE_FILE, "r", encoding="utf-8") as f:
+            cache = json.load(f)
+            timestamp = cache.get("timestamp", 0)
+            if time.time() - timestamp > MONGODB_STATUS_CACHE_TTL:
+                return None
+            return cache.get("available")
+    except (json.JSONDecodeError, IOError):
+        return None
 
 
 def _set_mongodb_available(available: bool) -> None:
-    """Cache MongoDB availability for the rest of this session."""
-    _mongodb_status["available"] = available
+    """Cache MongoDB availability to file with timestamp."""
+    try:
+        cache = {"available": available, "timestamp": time.time()}
+        with open(MONGODB_STATUS_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+    except IOError:
+        pass
 
 
 def send_to_mongodb_server(
@@ -99,7 +117,10 @@ def _send_via_proxy(
 
     proxy_url = config.mongodb_proxy_url
     if not proxy_url:
-        logger.warning("mongodb_proxy_url not set, skipping proxy send")
+        logger.error(
+            "mongodb_proxy_url not set but mongodb_enable_proxy=True."
+            "Set CLAUDE_TELEMETRY_MONGODB_PROXY_URL in .env or disable proxy mode."
+        )
         return False, {}
 
     if not _check_proxy_health(proxy_url=proxy_url, logger=logger):
@@ -167,119 +188,111 @@ def _send_via_pymongo(
         from pymongo import MongoClient
 
         client = MongoClient(mongodb_url, serverSelectionTimeoutMS=5000)
-        db = client[database_name]
-        mongo_collection = db[collection]
+        try:
+            db = client[database_name]
+            mongo_collection = db[collection]
 
-        current_time = utc_now_iso()
-        conversation_id: str = data.get("conversation_id", "")
+            current_time = utc_now_iso()
+            conversation_id: str = data.get("conversation_id", "")
 
-        if collection == "conversations":
-            new_events: list[dict] = data.get("new_events", [])
-            existing = mongo_collection.find_one({"conversation_id": conversation_id})
+            if collection == "conversations":
+                new_events: list[dict] = data.get("new_events", [])
+                username: str = data.get("username", "")
+                email: str = data.get("email", "")
+                existing = mongo_collection.find_one({"conversation_id": conversation_id})
 
-            if existing:
-                existing_events: dict = existing.get("events", {})
-                for event in new_events:
-                    existing_events[str(event["id"])] = event
-                mongo_collection.update_one(
-                    {"conversation_id": conversation_id},
-                    {"$set": {"events": existing_events, "updated_at": current_time}},
-                )
-                result = {
-                    "status": "updated",
-                    "total_events_count": len(existing_events),
-                }
-            else:
-                events_dict = {str(e["id"]): e for e in new_events}
-                mongo_collection.insert_one(
-                    {
-                        "conversation_id": conversation_id,
-                        "created_at": current_time,
-                        "events": events_dict,
-                        "updated_at": current_time,
+                if existing:
+                    existing_events: dict = existing.get("events", {})
+                    for event in new_events:
+                        existing_events[str(event["id"])] = event
+                    mongo_collection.update_one(
+                        {"conversation_id": conversation_id},
+                        {
+                            "$set": {
+                                "username": username,
+                                "email": email,
+                                "updated_at": current_time,
+                                "events": existing_events,
+                            }
+                        },
+                    )
+                    result = {
+                        "status": "updated",
+                        "total_events_count": len(existing_events),
                     }
-                )
-                result = {"status": "created", "total_events_count": len(events_dict)}
-
-        elif collection == "events":
-            event_data: dict = data.get("event_data", {})
-            event_key: str = str(event_data.get("id", "0"))
-            existing = mongo_collection.find_one({"conversation_id": conversation_id})
-
-            if existing:
-                mongo_collection.update_one(
-                    {"conversation_id": conversation_id},
-                    {
-                        "$set": {
-                            f"events.{event_key}": event_data,
+                else:
+                    events_dict = {str(e["id"]): e for e in new_events}
+                    mongo_collection.insert_one(
+                        {
+                            "conversation_id": conversation_id,
+                            "username": username,
+                            "email": email,
+                            "created_at": current_time,
                             "updated_at": current_time,
+                            "events": events_dict,
                         }
-                    },
-                )
-                result = {"status": "updated", "event_key": event_key}
-            else:
-                mongo_collection.insert_one(
-                    {
-                        "conversation_id": conversation_id,
-                        "created_at": current_time,
-                        "events": {event_key: event_data},
-                        "updated_at": current_time,
-                    }
-                )
-                result = {"status": "created", "event_key": event_key}
+                    )
+                    result = {"status": "created", "total_events_count": len(events_dict)}
 
-        elif collection == "metadata":
-            doc = data.get("document", {})
-            doc["updated_at"] = current_time
-            existing = mongo_collection.find_one(
-                {"conversation_id": doc.get("conversation_id", "")}
-            )
-            if existing:
-                mongo_collection.update_one(
-                    {"conversation_id": doc["conversation_id"]},
-                    {"$set": doc},
-                )
-                result = {"status": "updated"}
-            else:
-                doc["created_at"] = current_time
-                mongo_collection.insert_one(doc)
-                result = {"status": "created"}
+            elif collection == "events":
+                event_data: dict = data.get("event_data", {})
+                event_key: str = str(event_data.get("id", "0"))
+                username: str = event_data.get("username", "")
+                email: str = event_data.get("email", "")
+                existing = mongo_collection.find_one({"conversation_id": conversation_id})
 
-        elif collection == "monitors":
-            monitor_data: dict = data.get("monitor_data", {})
-            monitor_key: str = str(monitor_data.get("id", "0"))
-            existing = mongo_collection.find_one({"conversation_id": conversation_id})
-
-            if existing:
-                mongo_collection.update_one(
-                    {"conversation_id": conversation_id},
-                    {
-                        "$set": {
-                            f"monitors.{monitor_key}": monitor_data,
+                if existing:
+                    mongo_collection.update_one(
+                        {"conversation_id": conversation_id},
+                        {
+                            "$set": {
+                                "username": username,
+                                "email": email,
+                                "updated_at": current_time,
+                                f"events.{event_key}": event_data,
+                            }
+                        },
+                    )
+                    result = {"status": "updated", "event_key": event_key}
+                else:
+                    mongo_collection.insert_one(
+                        {
+                            "conversation_id": conversation_id,
+                            "username": username,
+                            "email": email,
+                            "created_at": current_time,
                             "updated_at": current_time,
+                            "events": {event_key: event_data},
                         }
-                    },
+                    )
+                    result = {"status": "created", "event_key": event_key}
+
+            elif collection == "metadata":
+                doc = data.get("document", {})
+                doc["updated_at"] = current_time
+                existing = mongo_collection.find_one(
+                    {"conversation_id": doc.get("conversation_id", "")}
                 )
-                result = {"status": "updated", "monitor_key": monitor_key}
+                if existing:
+                    mongo_collection.update_one(
+                        {"conversation_id": doc["conversation_id"]},
+                        {"$set": doc},
+                    )
+                    result = {"status": "updated"}
+                else:
+                    doc["created_at"] = current_time
+                    mongo_collection.insert_one(doc)
+                    result = {"status": "created"}
+
             else:
-                mongo_collection.insert_one(
-                    {
-                        "conversation_id": conversation_id,
-                        "created_at": current_time,
-                        "monitors": {monitor_key: monitor_data},
-                        "updated_at": current_time,
-                    }
-                )
-                result = {"status": "created", "monitor_key": monitor_key}
+                logger.error("Unknown collection: %s", collection)
+                return False, {}
 
-        else:
-            logger.error("Unknown collection: %s", collection)
-            return False, {}
-
-        client.close()
-        logger.info("MongoDB send OK: %s", result)
-        _set_mongodb_available(True)
-        return True, result
+            logger.info("MongoDB send OK: %s", result)
+            _set_mongodb_available(True)
+            return True, result
+        finally:
+            client.close()
 
     except ImportError:
         logger.error("pymongo not installed. Install with: pip install pymongo")

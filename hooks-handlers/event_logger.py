@@ -29,8 +29,6 @@ from utils import (  # noqa: E402
     utc_now_iso,
 )
 
-get_config()
-
 COLLECTION_EVENTS = "events"
 
 
@@ -62,6 +60,10 @@ def send_event_to_mongodb(conversation_id: str, event_data: dict, logger: loggin
     """Send a single event to MongoDB."""
     event_with_id = dict(event_data)
     event_with_id["id"] = generate_event_id()
+
+    config = get_config()
+    event_with_id["username"] = config.username
+    event_with_id["email"] = config.email
 
     success, resp = send_to_mongodb_server(
         collection=COLLECTION_EVENTS,
@@ -95,15 +97,11 @@ def main() -> None:
 
         session_dir: Path = get_session_log_dir(conversation_id=conversation_id)
 
-        event_file = session_dir / f"{event_type}.jsonl"
-        with open(event_file, "a", encoding="utf-8") as f:
-            f.write(formatted_output)
-
         all_events_file = session_dir / "all_events.jsonl"
         with open(all_events_file, "a", encoding="utf-8") as f:
             f.write(formatted_output)
 
-        logger.info("Logged event type: %s -> %s", event_type, event_file)
+        logger.info("Logged event type: %s", event_type)
 
         send_event_to_mongodb(
             conversation_id=conversation_id, event_data=ordered_data, logger=logger

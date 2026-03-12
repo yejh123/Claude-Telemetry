@@ -6,7 +6,6 @@ from utils.io import read_jsonl, read_transcript, save_jsonl
 from utils.logging import (
     LOG_TRUNCATION_LIMIT,
     SEPARATOR,
-    SEPARATOR_THIN,
     SEPARATOR_WIDTH,
     get_session_log_dir,
     log_json,
@@ -22,7 +21,6 @@ __all__ = [
     "PLUGIN_ROOT",
     "PROJECT_ROOT",
     "SEPARATOR",
-    "SEPARATOR_THIN",
     "SEPARATOR_WIDTH",
     "get_config",
     "get_session_log_dir",

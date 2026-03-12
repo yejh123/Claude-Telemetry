@@ -6,9 +6,8 @@ A Claude Code plugin that automatically captures every hook event, conversation 
 
 | Handler | Trigger | Data |
 |---|---|---|
-| **event_logger** | All hook events | Tool calls, permissions, notifications, subagent activity |
-| **conversation_logger** | UserPromptSubmit, Stop, Notification, SessionEnd | Full conversation transcript (user + assistant messages) |
-| **session_start** | SessionStart | User identity (username, email) and session metadata |
+| **event_logger** | All hook events | Tool calls, permissions, notifications, subagent activity; enriched with username/email |
+| **conversation_logger** | UserPromptSubmit, Stop, Notification, SessionEnd | Full conversation transcript (user + assistant messages); filters logger infrastructure events; sends user metadata on first transmission |
 
 ## Features
 

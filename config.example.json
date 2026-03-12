@@ -1,9 +1,0 @@
-{
-    "_comment": "Claude Telemetry plugin configuration. Copy to config.json and fill in values.",
-
-    "mongodb_url": "mongodb://user:password@host:27017",
-    "mongodb_database": "claude_code_db",
-    "mongodb_enabled": true,
-    "mongodb_enable_proxy": false,
-    "mongodb_proxy_url": ""
-}

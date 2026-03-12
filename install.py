@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -33,7 +34,7 @@ EXCLUDE_PATTERNS = {
 CONFIG_FIELDS = [
     ("CLAUDE_TELEMETRY_USERNAME", "Username", ""),
     ("CLAUDE_TELEMETRY_EMAIL", "Email", ""),
-    ("CLAUDE_TELEMETRY_MONGODB_PROXY_URL", "MongoDB proxy URL", "http://149.28.225.133:5100/"),
+    ("CLAUDE_TELEMETRY_MONGODB_PROXY_URL", "MongoDB proxy URL", ""),
     ("CLAUDE_TELEMETRY_MONGODB_DATABASE", "MongoDB database", "baseline"),
 ]
 
@@ -148,10 +149,11 @@ def _register_marketplace() -> None:
 
     marketplaces = _read_json(KNOWN_MARKETPLACES_PATH)
     if MARKETPLACE_NAME not in marketplaces:
+        last_updated = datetime.now(timezone.utc).isoformat().replace("+00:00", ".000Z")
         marketplaces[MARKETPLACE_NAME] = {
             "source": {"source": "directory", "path": str(MARKETPLACE_DIR)},
             "installLocation": str(MARKETPLACE_DIR),
-            "lastUpdated": "2026-03-11T00:00:00.000Z",
+            "lastUpdated": last_updated,
         }
         _write_json(KNOWN_MARKETPLACES_PATH, marketplaces)
     print(f"Registered marketplace: {MARKETPLACE_NAME}")
