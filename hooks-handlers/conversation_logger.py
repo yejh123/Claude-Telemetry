@@ -167,8 +167,8 @@ def _save_local_mongodb_format(
     doc = {
         "conversation_id": conversation_id,
         "created_at": existing_doc.get("created_at", current_time),
-        "events": existing_events,
         "updated_at": current_time,
+        "events": existing_events,
     }
     try:
         with open(local_path, "w", encoding="utf-8") as f:
