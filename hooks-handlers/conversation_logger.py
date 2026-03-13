@@ -30,46 +30,6 @@ COLLECTION_CONVERSATIONS = "conversations"
 COLLECTION_METADATA = "metadata"
 
 
-def _should_skip_event(hook_name: str) -> bool:
-    """Check if this hook event should be skipped to avoid recursive logging.
-
-    Args:
-        hook_name: The hookName field from the hook progress event.
-
-    Returns:
-        True if this event should be skipped, False otherwise.
-    """
-    return "event_logger" in hook_name or "conversation_logger" in hook_name
-
-
-def _send_metadata(conversation_id: str, username: str, email: str, logger: logging.Logger) -> None:
-    """Send user metadata to MongoDB on first conversation transmission.
-
-    Args:
-        conversation_id: Conversation ID.
-        username: Username from config.
-        email: Email from config.
-        logger: Logger instance.
-    """
-    metadata = {
-        "conversation_id": conversation_id,
-        "username": username,
-        "email": email,
-        "status": "active",
-        "created_at": utc_now_iso(),
-        "updated_at": utc_now_iso(),
-    }
-    success, resp = send_to_mongodb_server(
-        collection=COLLECTION_METADATA,
-        data={"conversation_id": conversation_id, "document": metadata},
-        logger=logger,
-    )
-    if success:
-        logger.info("Metadata sent to MongoDB: %s", resp.get("status", "ok"))
-    else:
-        logger.warning("Failed to send metadata to MongoDB")
-
-
 def _state_file_path(conversation_id: str) -> Path:
     return get_session_log_dir(conversation_id=conversation_id) / ".conversation_logger_state.json"
 
@@ -121,82 +81,6 @@ def _write_last_indices(
         json.dump(state, f, indent=2)
 
 
-def _reorder_fields(event: dict) -> dict:
-    ordered: dict = {}
-    for field in ("id", "timestamp", "type", "uuid", "parentUuid"):
-        if field in event:
-            ordered[field] = event[field]
-    for key, value in event.items():
-        if key not in ordered and key != "message":
-            ordered[key] = value
-    if "message" in event:
-        ordered["message"] = event["message"]
-    return ordered
-
-
-def _save_local_conversation(
-    conversation_path: str, conversation_id: str, logger: logging.Logger
-) -> None:
-    if not conversation_path or not Path(conversation_path).exists():
-        return
-    dest = get_session_log_dir(conversation_id=conversation_id) / "conversation.jsonl"
-    try:
-        shutil.copy2(conversation_path, dest)
-        logger.info("Saved local conversation: %s", dest)
-    except Exception as e:
-        logger.error("Error saving local conversation: %s", e)
-
-
-def _save_local_mongodb_format(
-    conversation_id: str, new_events: dict, logger: logging.Logger
-) -> None:
-    local_path = get_session_log_dir(conversation_id=conversation_id) / "conversation_mongodb.json"
-    current_time = utc_now_iso()
-
-    existing_doc: dict = {}
-    if local_path.exists():
-        try:
-            with open(local_path, "r", encoding="utf-8") as f:
-                existing_doc = json.load(f)
-        except (json.JSONDecodeError, IOError):
-            pass
-
-    existing_events: dict = existing_doc.get("events", {})
-    existing_events.update(new_events)
-
-    doc = {
-        "conversation_id": conversation_id,
-        "created_at": existing_doc.get("created_at", current_time),
-        "updated_at": current_time,
-        "events": existing_events,
-    }
-    try:
-        with open(local_path, "w", encoding="utf-8") as f:
-            json.dump(doc, f, indent=2, default=str)
-        logger.info("Saved local MongoDB format: %s", local_path)
-    except Exception as e:
-        logger.error("Error saving local MongoDB format: %s", e)
-
-
-def _build_events_dict(events: list[dict], start_event_id: int = 0) -> dict:
-    """Build MongoDB events dict with proper IDs starting from start_event_id.
-
-    Args:
-        events: List of events to process.
-        start_event_id: Starting ID for MongoDB events (default 0 for full rebuild).
-
-    Returns:
-        Dict with string IDs as keys and reordered events as values.
-    """
-    result: dict = {}
-    for i, event in enumerate(events):
-        mongodb_id = start_event_id + i
-        copy = event.copy()
-        copy["id"] = mongodb_id
-        result[str(mongodb_id)] = _reorder_fields(event=copy)
-    return result
-
-
 def _is_logger_hook_event(event: dict) -> bool:
     """Check if event is a logger infrastructure hook_progress that should be skipped.
 
@@ -211,8 +95,8 @@ def _is_logger_hook_event(event: dict) -> bool:
     data = event.get("data", {})
     if data.get("type") != "hook_progress":
         return False
-    hook_name = data.get("hookName", "")
-    return _should_skip_event(hook_name)
+    command = data.get("command", "")
+    return "event_logger" in command or "conversation_logger" in command
 
 
 def _read_conversation_events(
@@ -259,48 +143,22 @@ def _read_conversation_events(
     return events, last_line_index
 
 
-def _update_metadata_on_session_end(
-    conversation_id: str, hook_event_name: str, logger: logging.Logger
-) -> None:
-    """Update metadata status to "completed" if this is a SessionEnd hook.
-
-    Args:
-        conversation_id: Conversation ID.
-        hook_event_name: The hook_event_name from the event.
-        logger: Logger instance.
-    """
-    if "SessionEnd" not in hook_event_name:
-        return
-
-    config = get_config()
-    metadata_update = {
-        "conversation_id": conversation_id,
-        "username": config.username,
-        "email": config.email,
-        "status": "completed",
-        "updated_at": utc_now_iso(),
-    }
-    success, resp = send_to_mongodb_server(
-        collection=COLLECTION_METADATA,
-        data={"conversation_id": conversation_id, "document": metadata_update},
-        logger=logger,
-    )
-    if success:
-        logger.info("Metadata status updated to completed: %s", resp.get("status", "ok"))
-    else:
-        logger.warning("Failed to update metadata status to completed")
-
-
 def process_conversation(
-    conversation_path: str, conversation_id: str, logger: logging.Logger, hook_event_name: str = ""
+    conversation_path: str, conversation_id: str, logger: logging.Logger, hook_event_name: str
 ) -> None:
     if not conversation_path or not Path(conversation_path).exists():
         logger.error("Conversation file not found: %s", conversation_path)
         return
 
-    _save_local_conversation(
-        conversation_path=conversation_path, conversation_id=conversation_id, logger=logger
-    )
+    # Save a copy of the raw conversation.jsonl for reference/debugging
+    if not conversation_path or not Path(conversation_path).exists():
+        return
+    dest = get_session_log_dir(conversation_id=conversation_id) / "conversation.jsonl"
+    try:
+        shutil.copy2(conversation_path, dest)
+        logger.info("Saved local conversation: %s", dest)
+    except Exception as e:
+        logger.error("Error saving local conversation: %s", e)
 
     # Read last tracked indices
     line_index, last_processed_event_id = _read_last_indices(conversation_id=conversation_id)
@@ -312,29 +170,38 @@ def process_conversation(
     new_events, last_line_index = _read_conversation_events(
         conversation_path=conversation_path, start_line_index=line_index, logger=logger
     )
-
     if not new_events:
         logger.info("No new events to send")
         return
 
     config = get_config()
 
-    # On first transmission, send metadata
+    # Send user metadata to MongoDB on first conversation transmission
     if last_processed_event_id == -1:
-        _send_metadata(
-            conversation_id=conversation_id,
-            username=config.username,
-            email=config.email,
+        metadata = {
+            "conversation_id": conversation_id,
+            "username": config.username,
+            "email": config.email,
+            "status": "active",
+            "created_at": utc_now_iso(),
+            "updated_at": utc_now_iso(),
+        }
+        success, resp = send_to_mongodb_server(
+            collection=COLLECTION_METADATA,
+            data={"conversation_id": conversation_id, "document": metadata},
             logger=logger,
         )
-
-    logger.info("Sending %d new events to MongoDB", len(new_events))
+        if success:
+            logger.info("Metadata sent to MongoDB: %s", resp.get("status", "ok"))
+        else:
+            logger.warning("Failed to send metadata to MongoDB")
 
     # Assign MongoDB event IDs starting from last_processed_event_id + 1
     next_event_id = last_processed_event_id + 1
     for i, event in enumerate(new_events):
         event["id"] = next_event_id + i
 
+    logger.info("Sending %d new events to MongoDB", len(new_events))
     success, resp = send_to_mongodb_server(
         collection=COLLECTION_CONVERSATIONS,
         data={
@@ -345,17 +212,37 @@ def process_conversation(
         },
         logger=logger,
     )
-
-    # Build events dict for local storage
-    events_dict = _build_events_dict(events=new_events, start_event_id=next_event_id)
     if not success:
-        logger.warning("Failed to send conversation to MongoDB")
+        logger.error("Failed to send conversation to MongoDB")
     else:
         logger.info("Sent conversation to MongoDB: %s", resp.get("status", "ok"))
 
-    _save_local_mongodb_format(
-        conversation_id=conversation_id, new_events=events_dict, logger=logger
-    )
+    # Save local MongoDB format
+    local_path = get_session_log_dir(conversation_id=conversation_id) / "conversation_mongodb.json"
+    existing_doc: dict = {}
+    if local_path.exists():
+        try:
+            with open(local_path, "r", encoding="utf-8") as f:
+                existing_doc = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    existing_events: dict = existing_doc.get("events", {})
+    existing_events.update({event["id"]: event for event in new_events})
+
+    current_time = utc_now_iso()
+    doc = {
+        "conversation_id": conversation_id,
+        "created_at": existing_doc.get("created_at", current_time),
+        "updated_at": current_time,
+        "events": existing_events,
+    }
+    try:
+        with open(local_path, "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=2, default=str)
+        logger.info("Saved local MongoDB format: %s", local_path)
+    except Exception as e:
+        logger.error("Error saving local MongoDB format: %s", e)
 
     # Update state with both line_index and last_processed_event_id
     final_last_processed_event_id = next_event_id + len(new_events) - 1
@@ -365,9 +252,25 @@ def process_conversation(
         last_processed_event_id=final_last_processed_event_id,
     )
 
-    _update_metadata_on_session_end(
-        conversation_id=conversation_id, hook_event_name=hook_event_name, logger=logger
-    )
+    # Update metadata status to "completed" if this is a SessionEnd hook
+    if "SessionEnd" in hook_event_name:
+        config = get_config()
+        metadata_update = {
+            "conversation_id": conversation_id,
+            "username": config.username,
+            "email": config.email,
+            "status": "completed",
+            "updated_at": utc_now_iso(),
+        }
+        success, resp = send_to_mongodb_server(
+            collection=COLLECTION_METADATA,
+            data={"conversation_id": conversation_id, "document": metadata_update},
+            logger=logger,
+        )
+        if success:
+            logger.info("Metadata status updated to completed: %s", resp.get("status", "ok"))
+        else:
+            logger.warning("Failed to update metadata status to completed")
 
 
 def main() -> None:
